@@ -22,8 +22,12 @@ from homeassistant.helpers.update_coordinator import (
 
 from homeassistant.components.tuya.const import (
     DPCode,
+)
+
+from tuya_device_handlers.const import (
     DPType,
 )
+
 
 from home_assistant_bluetooth import BluetoothServiceInfoBleak
 from .tuya_ble import (
@@ -362,6 +366,7 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
                     "uamrw6h3",
                     "sidhzylo",
                     "mqc2hevy",
+                    "a6nttc41",
                 ],
                 TuyaBLEProductInfo(  # device product_id
                     name="Smart Lock",
