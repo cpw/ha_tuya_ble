@@ -626,7 +626,8 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
             ),
             "kcy0x4pi": TuyaBLEProductInfo(name="Curtain Controller"),
             "dy4dh1q0": TuyaBLEProductInfo(name="AOK AM24 Venetian Blinds Motor"),
-            "v3fzfd2y": TuyaBLEProductInfo(name="AOK AM25 Roller Blinds Motor"),
+            "v3fzfd2y": TuyaBLEProductInfo(name="Roller Blind"),
+            "mnet9kgf": TuyaBLEProductInfo(name="Roller Blind"),
         }
     ),
     "zwjcy": TuyaBLECategoryInfo(
@@ -692,9 +693,9 @@ def get_device_info(device: TuyaBLEDevice) -> DeviceInfo | None:
         product_info = get_product_info_by_ids(device.category, device.product_id)
     product_name: str
     if product_info:
-        product_name = f"{product_info.name} {device.name}"
+        product_name = f"{device.name} ({product_info.name})"
     else:
-        product_name = device.name
+        product_name = f"{device.name}"
     result = DeviceInfo(
         connections={(dr.CONNECTION_BLUETOOTH, device.address)},
         hw_version=device.hardware_version,
@@ -707,7 +708,7 @@ def get_device_info(device: TuyaBLEDevice) -> DeviceInfo | None:
             device.product_model or product_name,
             device.product_id,
         ),
-        name=("%s %s")
+        name=("%s (%s)")
         % (
             product_name,
             get_short_address(device.address),
