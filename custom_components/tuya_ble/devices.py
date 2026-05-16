@@ -678,10 +678,10 @@ async def get_device_readable_name(
             )
     short_address = get_short_address(discovery_info.address)
     if product_info:
-        return "%s %s" % (product_info.name, short_address)
+        return "PI: %s %s" % (product_info.name, short_address)
     if credentials:
-        return "%s %s" % (credentials.device_name, short_address)
-    return "%s %s" % (discovery_info.device.name, short_address)
+        return "C: %s %s" % (credentials.device_name, short_address)
+    return "FB: %s %s" % (discovery_info.device.name, short_address)
 
 
 def get_device_info(device: TuyaBLEDevice) -> DeviceInfo | None:
@@ -690,7 +690,7 @@ def get_device_info(device: TuyaBLEDevice) -> DeviceInfo | None:
         product_info = get_product_info_by_ids(device.category, device.product_id)
     product_name: str
     if product_info:
-        product_name = product_info.name
+        product_name = f"{product_info.name} {device.name}"
     else:
         product_name = device.name
     result = DeviceInfo(
