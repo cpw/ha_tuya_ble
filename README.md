@@ -35,6 +35,7 @@ The integration works locally, but connection to Tuya BLE device requires device
   + Fingerbot Plus (product_ids 'blliqpsj', 'ndvkgsrm', 'yiihr7zh', 'neq16kgd', 'mknd4lci', 'riecov42', 'bs3ubslo', '6jcvqwh0'), almost same as original, has sensor button for manual control.
   + CubeTouch 1s (product_id '3yqdo5yt'), built-in battery with USB type C charging.
   + CubeTouch II (product_id 'xhf790if'), built-in battery with USB type C charging.
+  + Tuya BLE Switch Robot (SB02) (product_id '4ctjfrzq')
 
   All features available in Home Assistant, programming (series of actions) is implemented for Fingerbot Plus.
   For programming exposed entities 'Program' (switch), 'Repeat forever', 'Repeats count', 'Idle position' and 'Program' (text). Format of program text is: 'position\[/time\];...' where position is in percents, optional time is in seconds (zero if missing).
@@ -59,6 +60,7 @@ The integration works locally, but connection to Tuya BLE device requires device
   + Smart Cylinder Lock (product_id 'z7lj676i')
   + TEKXDD Fingerprint Smart Lock (product_id 'okkyfgfs')
   + Orion Smart Door Handle Lock (product_id 'a6nttc41')
+  + Smart Cylinder Lock (LVD11_BK) (product_id 'hs21i377')
 
 * Climate (category_id 'wk')
   + Thermostatic Radiator Valve (product_ids 'drlajpqc', 'nhj2j7su').
@@ -84,6 +86,7 @@ The integration works locally, but connection to Tuya BLE device requires device
   + Water valve controller (product_id 'nxquc5lb')
   + NOUS L11 Bluetooth Smart Garden Water Timer (product_id '46zia2nz')
   + WT-03W Diivoo Smart Water Timer for Garden Hose (product_id '1fcnd8xk')
+  + ZX-7378 Smart Irrigation Controller (product_id: "ldcdnigc") 
   
   
 * Lights

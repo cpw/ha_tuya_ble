@@ -312,6 +312,7 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                     "oyqux5vv",  # LA-01 - Experimental
                     "ajk32biq",  # B16
                     "z7lj676i",  # Smart Cylinder Lock - Experimental
+                    "hs21i377",  # Smart Cylinder Lock (LVD11_BK)
                 ],
                 [
                     TuyaBLEAlarmLockStateMapping(dp_id=21),
@@ -1022,6 +1023,49 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                         key="time_left",
                         device_class=SensorDeviceClass.DURATION,
                         native_unit_of_measurement=UnitOfTime.SECONDS,
+                        state_class=SensorStateClass.MEASUREMENT,
+                    ),
+                ),
+            ],
+            "ldcdnigc": [  # ZX-7378 Smart Irrigation Controller
+                TuyaBLESensorMapping(
+                    dp_id=12,
+                    dp_type=TuyaBLEDataPointType.DT_ENUM,
+                    description=SensorEntityDescription(
+                        key="work_state",
+                        device_class=SensorDeviceClass.ENUM,
+                        options=["auto", "manual", "idle"],
+                    ),
+                ),
+                TuyaBLESensorMapping(
+                    dp_id=8,
+                    dp_type=TuyaBLEDataPointType.DT_ENUM,
+                    description=SensorEntityDescription(
+                        key="battery_state",
+                        name="Battery State",
+                        device_class=SensorDeviceClass.ENUM,
+                        options=["low", "middle", "high"],
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    ),
+                ),
+                TuyaBLESensorMapping(
+                    dp_id=7,
+                    dp_type=TuyaBLEDataPointType.DT_VALUE,
+                    description=SensorEntityDescription(
+                        key="battery_percentage",
+                        name="Battery Percentage",
+                        device_class=SensorDeviceClass.BATTERY,
+                        native_unit_of_measurement=PERCENTAGE,
+                        state_class=SensorStateClass.MEASUREMENT,
+                    ),
+                ),
+                TuyaBLESensorMapping(
+                    dp_id=15,
+                    description=SensorEntityDescription(
+                        key="use_time_one",
+                        device_class=SensorDeviceClass.DURATION,
+                        native_unit_of_measurement=UnitOfTime.SECONDS,
+                        entity_category=EntityCategory.DIAGNOSTIC,
                         state_class=SensorStateClass.MEASUREMENT,
                     ),
                 ),
