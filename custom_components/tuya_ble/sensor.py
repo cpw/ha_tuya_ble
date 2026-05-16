@@ -1127,6 +1127,27 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                     ),
                 ],
             ),
+            "v3fzfd2y": [
+                TuyaBLEBatteryMapping(dp_id=13),
+                TuyaBLESensorMapping(
+                    dp_id=7,
+                    description=SensorEntityDescription(
+                        key="cover_work_state",
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    ),
+                ),
+
+            ],
+            "mnet9kgf": [
+                TuyaBLEBatteryMapping(dp_id=13),
+                TuyaBLESensorMapping(
+                    dp_id=7,
+                    description=SensorEntityDescription(
+                        key="cover_work_state",
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    ),
+                ),
+            ]
         }
     ),
 }
