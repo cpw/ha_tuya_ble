@@ -677,6 +677,8 @@ async def get_device_readable_name(
                 credentials.product_id,
             )
     short_address = get_short_address(discovery_info.address)
+    if product_info and credentials:
+        return f"A: {credentials.device_name} ({product_info.name}) {short_address}"
     if product_info:
         return "PI: %s %s" % (product_info.name, short_address)
     if credentials:
