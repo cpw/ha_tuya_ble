@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from bleak_retry_connector import BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS, get_device
@@ -67,21 +68,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ) from ex
     """
 
+    initial_update_task: asyncio.Task[None] | None = None
+
     async def _async_initial_update(_event: Event | None = None) -> None:
         """Run the first refresh after startup completes."""
         try:
             await device.update()
+        except asyncio.CancelledError:
+            _LOGGER.debug("Initial update for %s cancelled", address)
+            raise
         except BLEAK_EXCEPTIONS:
             _LOGGER.debug("Initial update for %s failed", address, exc_info=True)
 
+    @callback
+    def _async_cancel_initial_update() -> None:
+        """Cancel the deferred startup refresh if it is still pending."""
+        if initial_update_task and not initial_update_task.done():
+            initial_update_task.cancel()
+
     if hass.state == CoreState.running:
-        hass.async_create_task(device.update())
+        initial_update_task = hass.async_create_task(device.update())
     else:
+        def _async_startup_refresh(_event: Event) -> None:
+            nonlocal initial_update_task
+            initial_update_task = hass.async_create_task(_async_initial_update())
+
         entry.async_on_unload(
             hass.bus.async_listen_once(
-                EVENT_HOMEASSISTANT_STARTED, _async_initial_update
+                EVENT_HOMEASSISTANT_STARTED, _async_startup_refresh
             )
         )
+
+    entry.async_on_unload(_async_cancel_initial_update)
 
     @callback
     def _async_update_ble(
