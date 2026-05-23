@@ -56,6 +56,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 BLEAK_EXCEPTIONS = (*BLEAK_RETRY_EXCEPTIONS, OSError)
+POST_DPS_DISCONNECT_DELAY = 1.0
+POST_DPS_DISCONNECT_POLL = 0.1
 
 
 # @dataclass
@@ -360,6 +362,16 @@ class TuyaBLEDevice:
         _LOGGER.debug("%s: Updating", self.address)
         try:
             await self._send_packet(TuyaBLECode.FUN_SENDER_DEVICE_STATUS, bytes())
+            delay_remaining = POST_DPS_DISCONNECT_DELAY
+            while (
+                delay_remaining > 0
+                and not self._stopping
+                and self._client
+                and self._client.is_connected
+            ):
+                sleep_for = min(POST_DPS_DISCONNECT_POLL, delay_remaining)
+                await asyncio.sleep(sleep_for)
+                delay_remaining -= sleep_for
         finally:
             # Release the proxy slot as soon as the status refresh is done.
             if not self._stopping:
