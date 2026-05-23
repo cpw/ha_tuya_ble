@@ -9,8 +9,13 @@ from bleak_retry_connector import BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS, ge
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.match import ADDRESS, BluetoothCallbackMatcher
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS, EVENT_HOMEASSISTANT_STOP, Platform
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.const import (
+    CONF_ADDRESS,
+    EVENT_HOMEASSISTANT_STARTED,
+    EVENT_HOMEASSISTANT_STOP,
+    Platform,
+)
+from homeassistant.core import CoreState, Event, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 
 from .tuya_ble import TuyaBLEDevice
@@ -61,7 +66,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"Could not communicate with Tuya BLE device with address {address}"
         ) from ex
     """
-    hass.add_job(device.update())
+
+    async def _async_initial_update(_event: Event | None = None) -> None:
+        """Run the first refresh after startup completes."""
+        try:
+            await device.update()
+        except BLEAK_EXCEPTIONS:
+            _LOGGER.debug("Initial update for %s failed", address, exc_info=True)
+
+    if hass.state == CoreState.running:
+        hass.async_create_task(device.update())
+    else:
+        entry.async_on_unload(
+            hass.bus.async_listen_once(
+                EVENT_HOMEASSISTANT_STARTED, _async_initial_update
+            )
+        )
 
     @callback
     def _async_update_ble(

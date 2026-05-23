@@ -287,6 +287,7 @@ class TuyaBLEDevice:
         self._connect_lock = asyncio.Lock()
         self._client: BleakClientWithServiceCache | None = None
         self._expected_disconnect = False
+        self._stopping = False
         self._connected_callbacks: list[Callable[[], None]] = []
         self._callbacks: list[Callable[[list[TuyaBLEDataPoint]], None]] = []
         self._disconnected_callbacks: list[Callable[[], None]] = []
@@ -632,15 +633,29 @@ class TuyaBLEDevice:
     async def start(self):
         """Start the TuyaBLE."""
         _LOGGER.debug("%s: Starting...", self.address)
+        self._stopping = False
         # await self._send_packet()
 
     async def stop(self) -> None:
         """Stop the TuyaBLE."""
         _LOGGER.debug("%s: Stop", self.address)
-        await self._execute_disconnect()
+        self._stopping = True
+        try:
+            await asyncio.wait_for(self._execute_disconnect(), 3)
+        except asyncio.TimeoutError:
+            _LOGGER.debug(
+                "%s: Stop timed out while disconnecting; continuing shutdown",
+                self.address,
+                exc_info=True,
+            )
 
     def _disconnected(self, client: BleakClientWithServiceCache) -> None:
         """Disconnected callback."""
+        if self._stopping:
+            self._client = None
+            self._expected_disconnect = False
+            self._is_paired = False
+            return
         was_paired = self._is_paired
         self._is_paired = False
         expected_disconnect = self._expected_disconnect
@@ -701,6 +716,8 @@ class TuyaBLEDevice:
     async def _ensure_connected(self) -> None:
         """Ensure connection to device is established."""
         global global_connect_lock
+        if self._stopping:
+            return
         if self._expected_disconnect:
             return
         if self._connect_lock.locked():
@@ -713,8 +730,12 @@ class TuyaBLEDevice:
         if self._client and self._client.is_connected and self._is_paired:
             return
         async with self._connect_lock:
+            if self._stopping:
+                return
             # Check again while holding the lock
             await asyncio.sleep(0.01)
+            if self._stopping:
+                return
             if self._client and self._client.is_connected and self._is_paired:
                 return
             attempts_count = 100
@@ -728,6 +749,8 @@ class TuyaBLEDevice:
                     )
                     raise BleakNotFoundError()
                 try:
+                    if self._stopping:
+                        return
                     async with global_connect_lock:
                         _LOGGER.debug(
                             "%s: Connecting; RSSI: %s", self.address, self.rssi
@@ -844,22 +867,32 @@ class TuyaBLEDevice:
     async def _reconnect(self) -> None:
         """Attempt a reconnect"""
         _LOGGER.debug("%s: Reconnect, ensuring connection", self.address)
+        if self._stopping:
+            return
         async with self._seq_num_lock:
             self._current_seq_num = 1
         try:
             if self._expected_disconnect:
                 return
+            if self._stopping:
+                return
             await self._ensure_connected()
             if self._expected_disconnect:
                 return
+            if self._stopping:
+                return
             _LOGGER.debug("%s: Reconnect, connection ensured", self.address)
         except BLEAK_EXCEPTIONS:  # BleakNotFoundError:
+            if self._stopping:
+                return
             _LOGGER.debug(
                 "%s: Reconnect, failed to ensure connection - backing off",
                 self.address,
                 exc_info=True,
             )
             await asyncio.sleep(BLEAK_BACKOFF_TIME)
+            if self._stopping:
+                return
             _LOGGER.debug("%s: Reconnecting again", self.address)
             asyncio.create_task(self._reconnect())
 
@@ -972,9 +1005,13 @@ class TuyaBLEDevice:
         # retry: int | None = None,
     ) -> None:
         """Send packet to device and optional read response."""
+        if self._stopping:
+            return
         if self._expected_disconnect:
             return
         await self._ensure_connected()
+        if self._stopping:
+            return
         if self._expected_disconnect:
             return
         await self._send_packet_while_connected(code, data, 0, wait_for_response)
@@ -1067,9 +1104,13 @@ class TuyaBLEDevice:
                 raise
 
     async def _resend_packets(self, packets: list[bytes]) -> None:
+        if self._stopping:
+            return
         if self._expected_disconnect:
             return
         await self._ensure_connected()
+        if self._stopping:
+            return
         if self._expected_disconnect:
             return
         await self._int_send_packet_while_connected(packets)
