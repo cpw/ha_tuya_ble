@@ -304,6 +304,7 @@ class TuyaBLEDevice:
         self._device_version: str = ""
         self._protocol_version_str: str = ""
         self._hardware_version: str = ""
+        self._outgoing_protocol_version: int | None = None
 
         self._device_info: TuyaBLEDeviceCredentials | None = None
 
@@ -390,6 +391,10 @@ class TuyaBLEDevice:
                 self.append_functions(
                     self._device_info.functions, self._device_info.status_range
                 )
+                # The packet trace for this blind matches Tuya v2 framing on the
+                # outbound side, even though the device-info response reports v3.
+                if self._device_info.product_id == "mnet9kgf":
+                    self._outgoing_protocol_version = 2
 
         return self._device_info is not None
 
@@ -552,6 +557,11 @@ class TuyaBLEDevice:
     @property
     def protocol_version(self) -> str:
         return self._protocol_version_str
+
+    def _get_outgoing_protocol_version(self) -> int:
+        if self._outgoing_protocol_version is not None:
+            return self._outgoing_protocol_version
+        return self._protocol_version
 
     @property
     def datapoints(self) -> TuyaBLEDataPoints:
@@ -1027,6 +1037,7 @@ class TuyaBLEDevice:
         else:
             key = self._session_key
             security_flag = b"\x05"
+        protocol_version = self._get_outgoing_protocol_version()
 
         raw = bytearray()
         raw += pack(">IIHH", seq_num, response_to, code.value, len(data))
@@ -1049,7 +1060,7 @@ class TuyaBLEDevice:
 
             if packet_num == 0:
                 packet += self._pack_int(length)
-                packet += pack(">B", self._protocol_version << 4)
+                packet += pack(">B", protocol_version << 4)
 
             data_part = encrypted[
                 pos:pos + GATT_MTU - len(packet)  # fmt: skip
@@ -1607,7 +1618,7 @@ class TuyaBLEDevice:
 
     async def _send_datapoints(self, datapoint_ids: list[int]) -> None:
         """Send new values of datapoints to the device."""
-        if self._protocol_version == 3:
+        if self._get_outgoing_protocol_version() in (2, 3):
             await self._send_datapoints_v3(datapoint_ids)
         else:
             raise TuyaBLEDeviceError(0)
