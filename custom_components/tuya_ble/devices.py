@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 import logging
+from bleak_retry_connector import BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS
 from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID
 
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
@@ -18,6 +20,7 @@ from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
+    UpdateFailed,
 )
 
 from home_assistant_bluetooth import BluetoothServiceInfoBleak
@@ -109,7 +112,9 @@ class TuyaBLEEntity(CoordinatorEntity):
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        return self._coordinator.connected
+        # Keep entities available as long as the most recent scheduled refresh
+        # succeeded, even though we disconnect right after each read.
+        return self._coordinator.last_update_success
 
     @property
     def device(self) -> TuyaBLEDevice:
@@ -266,6 +271,7 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
             hass,
             _LOGGER,
             name=DOMAIN,
+            update_interval=timedelta(minutes=5),
         )
         self._device = device
         self._disconnected: bool = True
@@ -273,6 +279,13 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
         device.register_connected_callback(self._async_handle_connect)
         device.register_callback(self._async_handle_update)
         device.register_disconnected_callback(self._async_handle_disconnect)
+
+    async def _async_update_data(self) -> None:
+        """Refresh the device over BLE."""
+        try:
+            await self._device.update()
+        except BLEAK_EXCEPTIONS as ex:
+            raise UpdateFailed(str(ex)) from ex
 
     @property
     def connected(self) -> bool:

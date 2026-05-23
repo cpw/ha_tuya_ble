@@ -73,7 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _async_initial_update(_event: Event | None = None) -> None:
         """Run the first refresh after startup completes."""
         try:
-            await device.update()
+            await coordinator.async_refresh()
         except asyncio.CancelledError:
             _LOGGER.debug("Initial update for %s cancelled", address)
             raise
