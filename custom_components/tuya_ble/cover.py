@@ -301,6 +301,9 @@ class TuyaBLECover(TuyaBLEEntity, CoverEntity):
                 )
             )
             self._update_cover_state_without_validation(state)
+            # Match the app's tighter write-then-refresh behavior by requesting a fresh
+            # status immediately after the control write is queued.
+            self._hass.create_task(self._device.update())
             self._update_ha_state_for_cover_state(state)
 
     def _update_cover_state_without_validation(self, state: TuyaCoverState) -> None:

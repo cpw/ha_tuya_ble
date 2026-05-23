@@ -56,6 +56,8 @@ _LOGGER = logging.getLogger(__name__)
 
 
 BLEAK_EXCEPTIONS = (*BLEAK_RETRY_EXCEPTIONS, OSError)
+POST_DPS_DISCONNECT_DELAY = 1.0
+POST_DPS_DISCONNECT_POLL = 0.1
 
 
 # @dataclass
@@ -293,6 +295,7 @@ class TuyaBLEDevice:
         self._disconnected_callbacks: list[Callable[[], None]] = []
         self._current_seq_num = 1
         self._seq_num_lock = asyncio.Lock()
+        self._retry_tasks: set[asyncio.Task[None]] = set()
 
         self._is_bound = False
         self._flags = 0
@@ -301,7 +304,6 @@ class TuyaBLEDevice:
         self._device_version: str = ""
         self._protocol_version_str: str = ""
         self._hardware_version: str = ""
-
         self._device_info: TuyaBLEDeviceCredentials | None = None
 
         self._auth_key: bytes | None = None
@@ -357,7 +359,22 @@ class TuyaBLEDevice:
 
     async def update(self) -> None:
         _LOGGER.debug("%s: Updating", self.address)
-        await self._send_packet(TuyaBLECode.FUN_SENDER_DEVICE_STATUS, bytes())
+        try:
+            await self._send_packet(TuyaBLECode.FUN_SENDER_DEVICE_STATUS, bytes())
+            delay_remaining = POST_DPS_DISCONNECT_DELAY
+            while (
+                delay_remaining > 0
+                and not self._stopping
+                and self._client
+                and self._client.is_connected
+            ):
+                sleep_for = min(POST_DPS_DISCONNECT_POLL, delay_remaining)
+                await asyncio.sleep(sleep_for)
+                delay_remaining -= sleep_for
+        finally:
+            # Release the proxy slot as soon as the status refresh is done.
+            if not self._stopping:
+                self._disconnect()
 
     async def _update_device_info(self) -> bool:
         if self._device_info is None:
@@ -372,6 +389,7 @@ class TuyaBLEDevice:
                 self.append_functions(
                     self._device_info.functions, self._device_info.status_range
                 )
+
         return self._device_info is not None
 
     def append_functions(self, function: list[dict], status_range: list[dict]) -> None:
@@ -639,14 +657,26 @@ class TuyaBLEDevice:
         """Stop the TuyaBLE."""
         _LOGGER.debug("%s: Stop", self.address)
         self._stopping = True
-        try:
-            await asyncio.wait_for(self._execute_disconnect(), 3)
-        except asyncio.TimeoutError:
-            _LOGGER.debug(
-                "%s: Stop timed out while disconnecting; continuing shutdown",
-                self.address,
-                exc_info=True,
-            )
+        self._cancel_retry_tasks()
+        self._disconnect()
+
+    def _track_retry_task(self, task: asyncio.Task[None]) -> None:
+        """Track a reconnect/retry task so shutdown can cancel it."""
+        if self._stopping:
+            task.cancel()
+            return
+        self._retry_tasks.add(task)
+
+        def _cleanup(completed_task: asyncio.Task[None]) -> None:
+            self._retry_tasks.discard(completed_task)
+
+        task.add_done_callback(_cleanup)
+
+    def _cancel_retry_tasks(self) -> None:
+        """Cancel all queued retry tasks."""
+        for task in tuple(self._retry_tasks):
+            task.cancel()
+        self._retry_tasks.clear()
 
     def _disconnected(self, client: BleakClientWithServiceCache) -> None:
         """Disconnected callback."""
@@ -679,7 +709,7 @@ class TuyaBLEDevice:
                 self.address,
                 self.rssi,
             )
-            asyncio.create_task(self._reconnect())
+            self._track_retry_task(asyncio.create_task(self._reconnect()))
 
     def _disconnect(self) -> None:
         """Disconnect from device."""
@@ -695,6 +725,13 @@ class TuyaBLEDevice:
 
     async def _execute_disconnect(self) -> None:
         """Execute disconnection."""
+        if self._stopping:
+            self._client = None
+            self._expected_disconnect = False
+            self._is_paired = False
+            async with self._seq_num_lock:
+                self._current_seq_num = 1
+            return
         async with self._connect_lock:
             client = self._client
             self._client = None
@@ -927,7 +964,7 @@ class TuyaBLEDevice:
             if self._stopping:
                 return
             _LOGGER.debug("%s: Reconnecting again", self.address)
-            asyncio.create_task(self._reconnect())
+            self._track_retry_task(asyncio.create_task(self._reconnect()))
 
     @staticmethod
     def _calc_crc16(data: bytes) -> int:
@@ -1173,9 +1210,9 @@ class TuyaBLEDevice:
                 ex,
             )
             if self._is_paired:
-                asyncio.create_task(self._resend_packets(packets))
+                self._track_retry_task(asyncio.create_task(self._resend_packets(packets)))
             else:
-                asyncio.create_task(self._reconnect())
+                self._track_retry_task(asyncio.create_task(self._reconnect()))
             raise BleakError from ex
         except BleakError as ex:
             # Disconnect so we can reset state and try again
@@ -1186,9 +1223,9 @@ class TuyaBLEDevice:
                 ex,
             )
             if self._is_paired:
-                asyncio.create_task(self._resend_packets(packets))
+                self._track_retry_task(asyncio.create_task(self._resend_packets(packets)))
             else:
-                asyncio.create_task(self._reconnect())
+                self._track_retry_task(asyncio.create_task(self._reconnect()))
             raise
 
     async def _int_send_packets_locked(self, packets: list[bytes]) -> None:
@@ -1568,7 +1605,7 @@ class TuyaBLEDevice:
 
     async def _send_datapoints(self, datapoint_ids: list[int]) -> None:
         """Send new values of datapoints to the device."""
-        if self._protocol_version == 3:
+        if self._protocol_version in (2, 3):
             await self._send_datapoints_v3(datapoint_ids)
         else:
             raise TuyaBLEDeviceError(0)
