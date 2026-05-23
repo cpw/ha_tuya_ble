@@ -293,6 +293,7 @@ class TuyaBLEDevice:
         self._disconnected_callbacks: list[Callable[[], None]] = []
         self._current_seq_num = 1
         self._seq_num_lock = asyncio.Lock()
+        self._retry_tasks: set[asyncio.Task[None]] = set()
 
         self._is_bound = False
         self._flags = 0
@@ -640,7 +641,26 @@ class TuyaBLEDevice:
         """Stop the TuyaBLE."""
         _LOGGER.debug("%s: Stop", self.address)
         self._stopping = True
+        self._cancel_retry_tasks()
         self._disconnect()
+
+    def _track_retry_task(self, task: asyncio.Task[None]) -> None:
+        """Track a reconnect/retry task so shutdown can cancel it."""
+        if self._stopping:
+            task.cancel()
+            return
+        self._retry_tasks.add(task)
+
+        def _cleanup(completed_task: asyncio.Task[None]) -> None:
+            self._retry_tasks.discard(completed_task)
+
+        task.add_done_callback(_cleanup)
+
+    def _cancel_retry_tasks(self) -> None:
+        """Cancel all queued retry tasks."""
+        for task in tuple(self._retry_tasks):
+            task.cancel()
+        self._retry_tasks.clear()
 
     def _disconnected(self, client: BleakClientWithServiceCache) -> None:
         """Disconnected callback."""
@@ -673,7 +693,7 @@ class TuyaBLEDevice:
                 self.address,
                 self.rssi,
             )
-            asyncio.create_task(self._reconnect())
+            self._track_retry_task(asyncio.create_task(self._reconnect()))
 
     def _disconnect(self) -> None:
         """Disconnect from device."""
@@ -928,7 +948,7 @@ class TuyaBLEDevice:
             if self._stopping:
                 return
             _LOGGER.debug("%s: Reconnecting again", self.address)
-            asyncio.create_task(self._reconnect())
+            self._track_retry_task(asyncio.create_task(self._reconnect()))
 
     @staticmethod
     def _calc_crc16(data: bytes) -> int:
@@ -1164,9 +1184,9 @@ class TuyaBLEDevice:
                 ex,
             )
             if self._is_paired:
-                asyncio.create_task(self._resend_packets(packets))
+                self._track_retry_task(asyncio.create_task(self._resend_packets(packets)))
             else:
-                asyncio.create_task(self._reconnect())
+                self._track_retry_task(asyncio.create_task(self._reconnect()))
             raise BleakError from ex
         except BleakError as ex:
             # Disconnect so we can reset state and try again
@@ -1177,9 +1197,9 @@ class TuyaBLEDevice:
                 ex,
             )
             if self._is_paired:
-                asyncio.create_task(self._resend_packets(packets))
+                self._track_retry_task(asyncio.create_task(self._resend_packets(packets)))
             else:
-                asyncio.create_task(self._reconnect())
+                self._track_retry_task(asyncio.create_task(self._reconnect()))
             raise
 
     async def _int_send_packets_locked(self, packets: list[bytes]) -> None:
