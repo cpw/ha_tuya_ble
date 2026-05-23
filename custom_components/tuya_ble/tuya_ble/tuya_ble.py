@@ -1060,6 +1060,17 @@ class TuyaBLEDevice:
             pos += len(data_part)
             packet_num += 1
 
+        _LOGGER.debug(
+            "%s: Built %s ATT packet(s) for %s "
+            "(payload=%s, encrypted=%s, packet_lengths=%s)",
+            self.address,
+            len(command),
+            code.name,
+            len(data),
+            length,
+            [len(packet) for packet in command],
+        )
+
         return command
 
     async def _get_seq_num(self) -> int:
