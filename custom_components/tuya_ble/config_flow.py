@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import pycountry
 from typing import Any
 
 import voluptuous as vol
@@ -111,13 +110,14 @@ def _show_login_form(
                 user_input[CONF_COUNTRY_CODE] = country.name
                 break
 
-    def_country_name: str | None = None
-    try:
-        def_country = pycountry.countries.get(alpha_2=flow.hass.config.country)
-        if def_country:
-            def_country_name = def_country.name
-    except:
-        pass
+    def_country_name = next(
+        (
+            country.name
+            for country in TUYA_COUNTRIES
+            if country.country_code == flow.hass.config.country
+        ),
+        None,
+    )
 
     placeholders["url"] = "https://www.home-assistant.io/integrations/tuya/"
 
