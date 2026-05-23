@@ -358,7 +358,12 @@ class TuyaBLEDevice:
 
     async def update(self) -> None:
         _LOGGER.debug("%s: Updating", self.address)
-        await self._send_packet(TuyaBLECode.FUN_SENDER_DEVICE_STATUS, bytes())
+        try:
+            await self._send_packet(TuyaBLECode.FUN_SENDER_DEVICE_STATUS, bytes())
+        finally:
+            # Release the proxy slot as soon as the status refresh is done.
+            if not self._stopping:
+                self._disconnect()
 
     async def _update_device_info(self) -> bool:
         if self._device_info is None:
