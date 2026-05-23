@@ -640,14 +640,7 @@ class TuyaBLEDevice:
         """Stop the TuyaBLE."""
         _LOGGER.debug("%s: Stop", self.address)
         self._stopping = True
-        try:
-            await asyncio.wait_for(self._execute_disconnect(), 3)
-        except asyncio.TimeoutError:
-            _LOGGER.debug(
-                "%s: Stop timed out while disconnecting; continuing shutdown",
-                self.address,
-                exc_info=True,
-            )
+        self._disconnect()
 
     def _disconnected(self, client: BleakClientWithServiceCache) -> None:
         """Disconnected callback."""
@@ -696,6 +689,13 @@ class TuyaBLEDevice:
 
     async def _execute_disconnect(self) -> None:
         """Execute disconnection."""
+        if self._stopping:
+            self._client = None
+            self._expected_disconnect = False
+            self._is_paired = False
+            async with self._seq_num_lock:
+                self._current_seq_num = 1
+            return
         async with self._connect_lock:
             client = self._client
             self._client = None
@@ -781,6 +781,16 @@ class TuyaBLEDevice:
                     continue
 
                 if client and client.is_connected:
+                    if self._stopping:
+                        try:
+                            await client.disconnect()
+                        except:
+                            _LOGGER.debug(
+                                "%s: Disconnect during shutdown failed",
+                                self.address,
+                                exc_info=True,
+                            )
+                        continue
                     _LOGGER.debug("%s: Connected; RSSI: %s", self.address, self.rssi)
                     self._client = client
                     try:
@@ -796,6 +806,18 @@ class TuyaBLEDevice:
                         )
                         continue
                 else:
+                    continue
+
+                if self._stopping:
+                    try:
+                        await self._client.disconnect()
+                    except:
+                        _LOGGER.debug(
+                            "%s: Disconnect during shutdown failed",
+                            self.address,
+                            exc_info=True,
+                        )
+                    self._client = None
                     continue
 
                 if self._client and self._client.is_connected:
@@ -822,6 +844,18 @@ class TuyaBLEDevice:
                         )
                         continue
                 else:
+                    continue
+
+                if self._stopping:
+                    try:
+                        await self._client.disconnect()
+                    except:
+                        _LOGGER.debug(
+                            "%s: Disconnect during shutdown failed",
+                            self.address,
+                            exc_info=True,
+                        )
+                    self._client = None
                     continue
 
                 if self._client and self._client.is_connected:
