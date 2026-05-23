@@ -87,11 +87,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             initial_update_task.cancel()
 
     if hass.state == CoreState.running:
-        initial_update_task = hass.async_create_task(device.update())
+        initial_update_task = asyncio.create_task(device.update())
     else:
-        def _async_startup_refresh(_event: Event) -> None:
+        async def _async_startup_refresh(_event: Event) -> None:
             nonlocal initial_update_task
-            initial_update_task = hass.async_create_task(_async_initial_update())
+            initial_update_task = asyncio.create_task(_async_initial_update())
 
         entry.async_on_unload(
             hass.bus.async_listen_once(
