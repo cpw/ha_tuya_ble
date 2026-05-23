@@ -643,7 +643,9 @@ class TuyaBLEDevice:
         """Disconnected callback."""
         was_paired = self._is_paired
         self._is_paired = False
-        if self._expected_disconnect:
+        expected_disconnect = self._expected_disconnect
+        self._expected_disconnect = False
+        if expected_disconnect:
             _LOGGER.debug(
                 "%s: Disconnected from device; RSSI: %s",
                 self.address,
@@ -681,11 +683,18 @@ class TuyaBLEDevice:
         """Execute disconnection."""
         async with self._connect_lock:
             client = self._client
-            self._expected_disconnect = True
             self._client = None
             if client and client.is_connected:
-                await client.stop_notify(CHARACTERISTIC_NOTIFY)
-                await client.disconnect()
+                self._expected_disconnect = True
+                try:
+                    await client.stop_notify(CHARACTERISTIC_NOTIFY)
+                    await client.disconnect()
+                finally:
+                    # Let future reconnect attempts proceed once the disconnect
+                    # request has completed.
+                    self._expected_disconnect = False
+            else:
+                self._expected_disconnect = False
         async with self._seq_num_lock:
             self._current_seq_num = 1
 

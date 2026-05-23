@@ -282,6 +282,7 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
     def _async_handle_connect(self) -> None:
         if self._unsub_disconnect is not None:
             self._unsub_disconnect()
+            self._unsub_disconnect = None
         if self._disconnected:
             self._disconnected = False
             self.async_update_listeners()
