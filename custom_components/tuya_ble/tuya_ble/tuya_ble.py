@@ -58,6 +58,7 @@ _LOGGER = logging.getLogger(__name__)
 BLEAK_EXCEPTIONS = (*BLEAK_RETRY_EXCEPTIONS, OSError)
 POST_DPS_DISCONNECT_DELAY = 1.0
 POST_DPS_DISCONNECT_POLL = 0.1
+USER_COMMAND_GATE_QUIET_DELAY = 0.25
 
 
 # @dataclass
@@ -313,6 +314,8 @@ class TuyaBLEDevice:
 
         self._is_paired = False
         self._user_commands_ready = asyncio.Event()
+        self._user_commands_gate_pending = False
+        self._user_commands_gate_task: asyncio.Task | None = None
 
         self._input_buffer: bytearray | None = None
         self._input_expected_packet_num = 0
@@ -360,18 +363,49 @@ class TuyaBLEDevice:
 
     def _clear_user_command_gate(self) -> None:
         """Reset the gate for user-initiated datapoint writes."""
+        self._user_commands_gate_pending = False
         self._user_commands_ready.clear()
+        if self._user_commands_gate_task is not None:
+            self._user_commands_gate_task.cancel()
+            self._user_commands_gate_task = None
 
     def _open_user_command_gate(self) -> None:
         """Allow queued user-initiated datapoint writes to proceed."""
+        self._user_commands_gate_pending = False
         self._user_commands_ready.set()
 
+    def _arm_user_command_gate(self) -> None:
+        """Allow queued user datapoints after the initial device burst goes quiet."""
+        if self._user_commands_ready.is_set():
+            return
+        self._user_commands_gate_pending = True
+        if self._user_commands_gate_task is not None:
+            self._user_commands_gate_task.cancel()
+        self._user_commands_gate_task = asyncio.create_task(
+            self._open_user_command_gate_after_quiet()
+        )
+
+    async def _open_user_command_gate_after_quiet(self) -> None:
+        """Open the gate after the blind has been quiet for a short window."""
+        try:
+            await asyncio.sleep(USER_COMMAND_GATE_QUIET_DELAY)
+        except asyncio.CancelledError:
+            return
+        finally:
+            self._user_commands_gate_task = None
+
+        if self._stopping or not self._client or not self._client.is_connected:
+            return
+        if not self._user_commands_gate_pending:
+            return
+        self._open_user_command_gate()
+
     async def _wait_for_user_command_gate(self) -> None:
-        """Wait until the blind has asked for the initial time sync."""
+        """Wait until the blind's initial post-connect burst has gone quiet."""
         if self._user_commands_ready.is_set():
             return
         _LOGGER.debug(
-            "%s: Waiting for initial TIME1_REQ before sending user datapoints",
+            "%s: Waiting for initial device burst before sending user datapoints",
             self.address,
         )
         try:
@@ -1398,7 +1432,7 @@ class TuyaBLEDevice:
                 timezone = -int(time.timezone / 36)
                 data = str(timestamp).encode() + pack(">h", timezone)
                 asyncio.create_task(self._send_response(code, data, seq_num))
-                self._open_user_command_gate()
+                self._arm_user_command_gate()
 
             case TuyaBLECode.FUN_RECEIVE_TIME2_REQ:
                 if len(data) != 0:
@@ -1428,6 +1462,8 @@ class TuyaBLEDevice:
                         len(data),
                         data.hex(),
                     )
+                else:
+                    self._arm_user_command_gate()
                 asyncio.create_task(self._send_response(code, b"\x00", seq_num))
 
             case TuyaBLECode.FUN_SENDER_DPS:
@@ -1446,6 +1482,8 @@ class TuyaBLEDevice:
                             len(data),
                             data.hex(),
                         )
+                else:
+                    self._arm_user_command_gate()
                 asyncio.create_task(self._send_response(code, b"\x00", seq_num))
 
             case TuyaBLECode.FUN_RECEIVE_DP_V4 | TuyaBLECode.FUN_SENDER_DPS_V4:
@@ -1463,6 +1501,8 @@ class TuyaBLEDevice:
                         len(data),
                         data.hex(),
                     )
+                else:
+                    self._arm_user_command_gate()
                 asyncio.create_task(self._send_response(code, b"\x00", seq_num))
 
             case TuyaBLECode.FUN_RECEIVE_SIGN_DP:
@@ -1476,6 +1516,8 @@ class TuyaBLEDevice:
                         len(data),
                         data.hex(),
                     )
+                else:
+                    self._arm_user_command_gate()
                 data = pack(">HBB", dp_seq_num, flags, 0)
                 asyncio.create_task(self._send_response(code, data, seq_num))
 
@@ -1491,6 +1533,8 @@ class TuyaBLEDevice:
                         len(data),
                         data.hex(),
                     )
+                else:
+                    self._arm_user_command_gate()
                 asyncio.create_task(self._send_response(code, bytes(0), seq_num))
 
             case TuyaBLECode.FUN_RECEIVE_SIGN_TIME_DP:
