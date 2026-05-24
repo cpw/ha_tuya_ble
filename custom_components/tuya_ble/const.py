@@ -13,7 +13,7 @@ DOMAIN: Final = "tuya_ble"
 DEVICE_METADATA_UUIDS: Final = "uuids"
 
 DEVICE_DEF_MANUFACTURER: Final = "Tuya"
-SET_DISCONNECTED_DELAY = 60
+SET_DISCONNECTED_DELAY = 10 * 60
 
 CONF_UUID: Final = "uuid"
 CONF_LOCAL_KEY: Final = "local_key"
