@@ -43,6 +43,9 @@ from .base import IntegerTypeData, EnumTypeData
 
 _LOGGER = logging.getLogger(__name__)
 
+# Keep blinds fresh without holding them open indefinitely.
+IDLE_REFRESH_DELAY = max(60.0, float(SET_DISCONNECTED_DELAY - 60))
+
 
 @dataclass
 class TuyaBLEFingerbotInfo:
@@ -270,6 +273,7 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
         self._device = device
         self._disconnected: bool = True
         self._unsub_disconnect: CALLBACK_TYPE | None = None
+        self._unsub_idle_refresh: CALLBACK_TYPE | None = None
         device.register_connected_callback(self._async_handle_connect)
         device.register_callback(self._async_handle_update)
         device.register_disconnected_callback(self._async_handle_disconnect)
@@ -283,6 +287,9 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
         if self._unsub_disconnect is not None:
             self._unsub_disconnect()
             self._unsub_disconnect = None
+        if self._unsub_idle_refresh is not None:
+            self._unsub_idle_refresh()
+            self._unsub_idle_refresh = None
         if self._disconnected:
             self._disconnected = False
             self.async_update_listeners()
@@ -312,12 +319,34 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
         self.async_update_listeners()
 
     @callback
+    def _set_idle_refresh(self, _: None) -> None:
+        """Enqueue a deferred refresh to keep the blind current."""
+        self._unsub_idle_refresh = None
+        if self._device._stopping:
+            return
+        _LOGGER.debug(
+            "%s: Deferred idle refresh firing after %.1fs",
+            self._device.address,
+            IDLE_REFRESH_DELAY,
+        )
+        self.hass.create_task(self._device.update())
+
+    @callback
     def _async_handle_disconnect(self) -> None:
         """Trigger the callbacks for disconnected."""
         if self._unsub_disconnect is None:
             delay: float = SET_DISCONNECTED_DELAY
             self._unsub_disconnect = async_call_later(
                 self.hass, delay, self._set_disconnected
+            )
+        if self._unsub_idle_refresh is None and not self._device._stopping:
+            _LOGGER.debug(
+                "%s: Scheduling deferred idle refresh after %.1fs",
+                self._device.address,
+                IDLE_REFRESH_DELAY,
+            )
+            self._unsub_idle_refresh = async_call_later(
+                self.hass, IDLE_REFRESH_DELAY, self._set_idle_refresh
             )
 
 
