@@ -1392,6 +1392,7 @@ class TuyaBLEDevice:
                             "%s: DPS packet looks like an ack/keepalive (payload=01)",
                             self.address,
                         )
+                        return
                     else:
                         _LOGGER.debug(
                             "%s: DPS packet carried no datapoints (payload_len=%s, payload=%s)",
