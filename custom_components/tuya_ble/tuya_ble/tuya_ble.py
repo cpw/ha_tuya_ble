@@ -1304,6 +1304,7 @@ class TuyaBLEDevice:
             pos = next_pos
 
         self._fire_callbacks(datapoints)
+        return len(datapoints)
 
     def _handle_command_or_response(
         self, seq_num: int, response_to: int, code: TuyaBLECode, data: bytes
@@ -1373,21 +1374,55 @@ class TuyaBLEDevice:
                 asyncio.create_task(self._send_response(code, data, seq_num))
 
             case TuyaBLECode.FUN_RECEIVE_DP:
-                self._parse_datapoints_v3(time.time(), 0, data, 0)
+                parsed = self._parse_datapoints_v3(time.time(), 0, data, 0)
+                if parsed == 0:
+                    _LOGGER.debug(
+                        "%s: DPS packet carried no datapoints (payload_len=%s, payload=%s)",
+                        self.address,
+                        len(data),
+                        data.hex(),
+                    )
                 asyncio.create_task(self._send_response(code, bytes(0), seq_num))
 
             case TuyaBLECode.FUN_SENDER_DPS:
-                self._parse_datapoints_v3(time.time(), 0, data, 0)
+                parsed = self._parse_datapoints_v3(time.time(), 0, data, 0)
+                if parsed == 0:
+                    if data == b"\x01":
+                        _LOGGER.debug(
+                            "%s: DPS packet looks like an ack/keepalive (payload=01)",
+                            self.address,
+                        )
+                    else:
+                        _LOGGER.debug(
+                            "%s: DPS packet carried no datapoints (payload_len=%s, payload=%s)",
+                            self.address,
+                            len(data),
+                            data.hex(),
+                        )
                 asyncio.create_task(self._send_response(code, bytes(0), seq_num))
 
             case TuyaBLECode.FUN_RECEIVE_DP_V4 | TuyaBLECode.FUN_SENDER_DPS_V4:
-                self._parse_datapoints_v3(time.time(), 0, data, 0)
+                parsed = self._parse_datapoints_v3(time.time(), 0, data, 0)
+                if parsed == 0:
+                    _LOGGER.debug(
+                        "%s: DPS packet carried no datapoints (payload_len=%s, payload=%s)",
+                        self.address,
+                        len(data),
+                        data.hex(),
+                    )
                 asyncio.create_task(self._send_response(code, bytes(0), seq_num))
 
             case TuyaBLECode.FUN_RECEIVE_SIGN_DP:
                 dp_seq_num = int.from_bytes(data[:2], "big")
                 flags = data[2]
-                self._parse_datapoints_v3(time.time(), flags, data, 2)
+                parsed = self._parse_datapoints_v3(time.time(), flags, data, 2)
+                if parsed == 0:
+                    _LOGGER.debug(
+                        "%s: Signed DPS packet carried no datapoints (payload_len=%s, payload=%s)",
+                        self.address,
+                        len(data),
+                        data.hex(),
+                    )
                 data = pack(">HBB", dp_seq_num, flags, 0)
                 asyncio.create_task(self._send_response(code, data, seq_num))
 
@@ -1395,7 +1430,14 @@ class TuyaBLEDevice:
                 timestamp: float
                 pos: int
                 timestamp, pos = self._parse_timestamp(data, 0)
-                self._parse_datapoints_v3(timestamp, 0, data, pos)
+                parsed = self._parse_datapoints_v3(timestamp, 0, data, pos)
+                if parsed == 0:
+                    _LOGGER.debug(
+                        "%s: Timed DPS packet carried no datapoints (payload_len=%s, payload=%s)",
+                        self.address,
+                        len(data),
+                        data.hex(),
+                    )
                 asyncio.create_task(self._send_response(code, bytes(0), seq_num))
 
             case TuyaBLECode.FUN_RECEIVE_SIGN_TIME_DP:
@@ -1404,7 +1446,14 @@ class TuyaBLEDevice:
                 dp_seq_num = int.from_bytes(data[:2], "big")
                 flags = data[2]
                 timestamp, pos = self._parse_timestamp(data, 3)
-                self._parse_datapoints_v3(time.time(), flags, data, pos)
+                parsed = self._parse_datapoints_v3(time.time(), flags, data, pos)
+                if parsed == 0:
+                    _LOGGER.debug(
+                        "%s: Signed timed DPS packet carried no datapoints (payload_len=%s, payload=%s)",
+                        self.address,
+                        len(data),
+                        data.hex(),
+                    )
                 data = pack(">HBB", dp_seq_num, flags, 0)
                 asyncio.create_task(self._send_response(code, data, seq_num))
 
