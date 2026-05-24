@@ -59,6 +59,8 @@ BLEAK_EXCEPTIONS = (*BLEAK_RETRY_EXCEPTIONS, OSError)
 POST_DPS_DISCONNECT_DELAY = 1.0
 POST_DPS_DISCONNECT_POLL = 0.1
 USER_COMMAND_GATE_QUIET_DELAY = 0.25
+POST_COMMAND_DISCONNECT_QUIET_DELAY = 1.0
+POST_COMMAND_DISCONNECT_POLL = 0.1
 
 
 # @dataclass
@@ -316,6 +318,8 @@ class TuyaBLEDevice:
         self._user_commands_ready = asyncio.Event()
         self._user_commands_gate_pending = False
         self._user_commands_gate_task: asyncio.Task | None = None
+        self._post_command_disconnect_task: asyncio.Task | None = None
+        self._last_packet_received: datetime | None = None
 
         self._input_buffer: bytearray | None = None
         self._input_expected_packet_num = 0
@@ -399,6 +403,46 @@ class TuyaBLEDevice:
         if not self._user_commands_gate_pending:
             return
         self._open_user_command_gate()
+
+    def _clear_post_command_disconnect(self) -> None:
+        """Cancel any pending post-command disconnect."""
+        if self._post_command_disconnect_task is not None:
+            self._post_command_disconnect_task.cancel()
+            self._post_command_disconnect_task = None
+
+    def _arm_post_command_disconnect(self) -> None:
+        """Disconnect after post-command traffic has gone quiet."""
+        if self._stopping:
+            return
+        self._clear_post_command_disconnect()
+        self._post_command_disconnect_task = asyncio.create_task(
+            self._disconnect_after_post_command_quiet()
+        )
+
+    async def _disconnect_after_post_command_quiet(self) -> None:
+        """Disconnect once no packets have been seen for a short window."""
+        try:
+            while not self._stopping and self._client and self._client.is_connected:
+                if self._last_packet_received is not None:
+                    quiet_for = (
+                        datetime.now(timezone.utc) - self._last_packet_received
+                    ).total_seconds()
+                    if quiet_for >= POST_COMMAND_DISCONNECT_QUIET_DELAY:
+                        break
+                await asyncio.sleep(POST_COMMAND_DISCONNECT_POLL)
+        except asyncio.CancelledError:
+            return
+        finally:
+            self._post_command_disconnect_task = None
+
+        if self._stopping or not self._client or not self._client.is_connected:
+            return
+        _LOGGER.debug(
+            "%s: Post-command traffic quiet for %.2fs; disconnecting",
+            self.address,
+            POST_COMMAND_DISCONNECT_QUIET_DELAY,
+        )
+        self._disconnect()
 
     async def _wait_for_user_command_gate(self) -> None:
         """Wait until the blind's initial post-connect burst has gone quiet."""
@@ -731,6 +775,7 @@ class TuyaBLEDevice:
             self._expected_disconnect = False
             self._is_paired = False
             self._clear_user_command_gate()
+            self._clear_post_command_disconnect()
             return
         was_paired = self._is_paired
         self._is_paired = False
@@ -746,6 +791,7 @@ class TuyaBLEDevice:
             return
         self._client = None
         self._clear_user_command_gate()
+        self._clear_post_command_disconnect()
         _LOGGER.warning(
             "%s: Device unexpectedly disconnected; RSSI: %s",
             self.address,
@@ -788,6 +834,7 @@ class TuyaBLEDevice:
             else:
                 self._expected_disconnect = False
         self._clear_user_command_gate()
+        self._clear_post_command_disconnect()
         async with self._seq_num_lock:
             self._current_seq_num = 1
 
@@ -1650,6 +1697,7 @@ class TuyaBLEDevice:
     def _notification_handler(self, _sender: int, data: bytearray) -> None:
         """Handle notification responses."""
         _LOGGER.debug("%s: Packet received: %s", self.address, data.hex())
+        self._last_packet_received = datetime.now(timezone.utc)
 
         pos: int = 0
         packet_num: int
@@ -1724,6 +1772,7 @@ class TuyaBLEDevice:
         await self._ensure_connected()
         await self._wait_for_user_command_gate()
         await self._send_packet(TuyaBLECode.FUN_SENDER_DPS, data)
+        self._arm_post_command_disconnect()
 
     async def _send_datapoints(self, datapoint_ids: list[int]) -> None:
         """Send new values of datapoints to the device."""
