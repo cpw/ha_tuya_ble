@@ -61,7 +61,8 @@ POST_DPS_DISCONNECT_POLL = 0.1
 USER_COMMAND_GATE_QUIET_DELAY = 0.25
 POST_COMMAND_DISCONNECT_QUIET_DELAY = 1.0
 POST_COMMAND_DISCONNECT_POLL = 0.1
-POST_COMMAND_REFRESH_DELAYS = (2.0, 5.0, 10.0, 30.0, 60.0, 300.0)
+POST_COMMAND_REFRESH_MOVING_DELAYS = (2.0, 5.0, 10.0)
+POST_COMMAND_REFRESH_STOPPED_DELAYS = (30.0, 60.0, 300.0)
 
 
 # @dataclass
@@ -425,6 +426,27 @@ class TuyaBLEDevice:
             self._post_command_refresh_task.cancel()
         self._post_command_refresh_task = None
 
+    def _get_post_command_refresh_stopped(self) -> bool:
+        """Return whether the blind currently reports a stopped state."""
+        datapoint = self._datapoints[1]
+        return bool(
+            datapoint
+            and datapoint.type == TuyaBLEDataPointType.DT_ENUM
+            and int(datapoint.value) == 1
+        )
+
+    @staticmethod
+    def _get_post_command_refresh_delay(
+        stopped: bool, refresh_count: int
+    ) -> float:
+        """Return the next refresh delay based on the current motion state."""
+        delays = (
+            POST_COMMAND_REFRESH_STOPPED_DELAYS
+            if stopped
+            else POST_COMMAND_REFRESH_MOVING_DELAYS
+        )
+        return delays[min(refresh_count, len(delays) - 1)]
+
     def _arm_post_command_disconnect(self) -> None:
         """Disconnect after post-command traffic has gone quiet."""
         if self._stopping:
@@ -469,21 +491,26 @@ class TuyaBLEDevice:
         """Refresh status repeatedly after the post-command disconnect has completed."""
         self._post_command_refresh_running = True
         try:
-            delay_index = 0
+            refresh_count = 0
+            stopped = self._get_post_command_refresh_stopped()
             while not self._stopping and self._post_command_refresh_pending:
-                delay = POST_COMMAND_REFRESH_DELAYS[
-                    min(delay_index, len(POST_COMMAND_REFRESH_DELAYS) - 1)
-                ]
+                delay = self._get_post_command_refresh_delay(stopped, refresh_count)
                 await asyncio.sleep(delay)
                 if self._stopping or not self._post_command_refresh_pending:
                     break
                 _LOGGER.debug(
-                    "%s: Post-command refresh after %.1fs",
+                    "%s: Post-command refresh after %.1fs (%s)",
                     self.address,
                     delay,
+                    "stopped" if stopped else "moving",
                 )
                 await self.update()
-                delay_index += 1
+                new_stopped = self._get_post_command_refresh_stopped()
+                if new_stopped != stopped:
+                    refresh_count = 0
+                    stopped = new_stopped
+                else:
+                    refresh_count += 1
         except asyncio.CancelledError:
             return
         finally:

@@ -1145,6 +1145,8 @@ mapping: dict[str, TuyaBLECategorySensorMapping] = {
                     description=SensorEntityDescription(
                         key="cover_work_state",
                         entity_category=EntityCategory.DIAGNOSTIC,
+                        device_class=SensorDeviceClass.ENUM,
+                        options=["opening", "closing"],
                     ),
                 ),
             ]
