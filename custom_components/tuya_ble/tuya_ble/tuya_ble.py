@@ -243,7 +243,6 @@ class TuyaBLEDataPoints:
             )
 
     async def _update_from_user(self, dp_id: int) -> None:
-        await self._owner._wait_for_user_command_gate()
         if self._update_started > 0:
             if dp_id in self._updated_datapoints:
                 self._updated_datapoints.remove(dp_id)
@@ -1678,6 +1677,8 @@ class TuyaBLEDevice:
             data += pack(">BBB", dp.id, int(dp.type.value), len(value))
             data += value
 
+        await self._ensure_connected()
+        await self._wait_for_user_command_gate()
         await self._send_packet(TuyaBLECode.FUN_SENDER_DPS, data)
 
     async def _send_datapoints(self, datapoint_ids: list[int]) -> None:
