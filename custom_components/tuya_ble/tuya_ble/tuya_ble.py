@@ -1472,6 +1472,17 @@ class TuyaBLEDevice:
             )
             return
 
+        _LOGGER.debug(
+            "%s: Parsed packet #%s %s (response_to=%s, flags=%s, payload_len=%s, payload=%s)",
+            self.address,
+            seq_num,
+            code.name,
+            response_to,
+            getattr(self, '_flags', 0),
+            len(data),
+            data.hex(),
+        )
+
         if response_to != 0:
             _LOGGER.debug(
                 "%s: Received: #%s %s, response to #%s",
