@@ -1382,7 +1382,7 @@ class TuyaBLEDevice:
                         len(data),
                         data.hex(),
                     )
-                asyncio.create_task(self._send_response(code, bytes(0), seq_num))
+                asyncio.create_task(self._send_response(code, b"\x00", seq_num))
 
             case TuyaBLECode.FUN_SENDER_DPS:
                 parsed = self._parse_datapoints_v3(time.time(), 0, data, 0)
@@ -1399,7 +1399,7 @@ class TuyaBLEDevice:
                             len(data),
                             data.hex(),
                         )
-                asyncio.create_task(self._send_response(code, bytes(0), seq_num))
+                asyncio.create_task(self._send_response(code, b"\x00", seq_num))
 
             case TuyaBLECode.FUN_RECEIVE_DP_V4 | TuyaBLECode.FUN_SENDER_DPS_V4:
                 parsed = self._parse_datapoints_v3(time.time(), 0, data, 0)
@@ -1410,7 +1410,7 @@ class TuyaBLEDevice:
                         len(data),
                         data.hex(),
                     )
-                asyncio.create_task(self._send_response(code, bytes(0), seq_num))
+                asyncio.create_task(self._send_response(code, b"\x00", seq_num))
 
             case TuyaBLECode.FUN_RECEIVE_SIGN_DP:
                 dp_seq_num = int.from_bytes(data[:2], "big")
