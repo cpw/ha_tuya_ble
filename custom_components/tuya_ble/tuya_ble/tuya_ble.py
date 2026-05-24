@@ -243,6 +243,7 @@ class TuyaBLEDataPoints:
             )
 
     async def _update_from_user(self, dp_id: int) -> None:
+        await self._owner._wait_for_user_command_gate()
         if self._update_started > 0:
             if dp_id in self._updated_datapoints:
                 self._updated_datapoints.remove(dp_id)
@@ -312,6 +313,7 @@ class TuyaBLEDevice:
         self._session_key: bytes | None = None
 
         self._is_paired = False
+        self._user_commands_ready = asyncio.Event()
 
         self._input_buffer: bytearray | None = None
         self._input_expected_packet_num = 0
@@ -356,6 +358,30 @@ class TuyaBLEDevice:
         await self._send_packet(
             TuyaBLECode.FUN_SENDER_PAIR, self._build_pairing_request()
         )
+
+    def _clear_user_command_gate(self) -> None:
+        """Reset the gate for user-initiated datapoint writes."""
+        self._user_commands_ready.clear()
+
+    def _open_user_command_gate(self) -> None:
+        """Allow queued user-initiated datapoint writes to proceed."""
+        self._user_commands_ready.set()
+
+    async def _wait_for_user_command_gate(self) -> None:
+        """Wait until the blind has asked for the initial time sync."""
+        if self._user_commands_ready.is_set():
+            return
+        _LOGGER.debug(
+            "%s: Waiting for initial TIME1_REQ before sending user datapoints",
+            self.address,
+        )
+        try:
+            await asyncio.wait_for(self._user_commands_ready.wait(), RESPONSE_WAIT_TIMEOUT)
+        except asyncio.TimeoutError:
+            _LOGGER.debug(
+                "%s: TIME1_REQ gate timed out; sending datapoints anyway",
+                self.address,
+            )
 
     async def update(self) -> None:
         _LOGGER.debug("%s: Updating", self.address)
@@ -671,6 +697,7 @@ class TuyaBLEDevice:
             self._client = None
             self._expected_disconnect = False
             self._is_paired = False
+            self._clear_user_command_gate()
             return
         was_paired = self._is_paired
         self._is_paired = False
@@ -685,6 +712,7 @@ class TuyaBLEDevice:
             self._fire_disconnected_callbacks()
             return
         self._client = None
+        self._clear_user_command_gate()
         _LOGGER.warning(
             "%s: Device unexpectedly disconnected; RSSI: %s",
             self.address,
@@ -726,6 +754,7 @@ class TuyaBLEDevice:
                     self._expected_disconnect = False
             else:
                 self._expected_disconnect = False
+        self._clear_user_command_gate()
         async with self._seq_num_lock:
             self._current_seq_num = 1
 
@@ -1370,6 +1399,7 @@ class TuyaBLEDevice:
                 timezone = -int(time.timezone / 36)
                 data = str(timestamp).encode() + pack(">h", timezone)
                 asyncio.create_task(self._send_response(code, data, seq_num))
+                self._open_user_command_gate()
 
             case TuyaBLECode.FUN_RECEIVE_TIME2_REQ:
                 if len(data) != 0:
