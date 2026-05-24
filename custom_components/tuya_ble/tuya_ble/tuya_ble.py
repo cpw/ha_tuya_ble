@@ -61,8 +61,7 @@ POST_DPS_DISCONNECT_POLL = 0.1
 USER_COMMAND_GATE_QUIET_DELAY = 0.25
 POST_COMMAND_DISCONNECT_QUIET_DELAY = 1.0
 POST_COMMAND_DISCONNECT_POLL = 0.1
-POST_COMMAND_REFRESH_DELAY = 0.5
-POST_COMMAND_REFRESH_POLL = 0.1
+POST_COMMAND_REFRESH_DELAYS = (2.0, 5.0, 10.0, 30.0, 60.0, 300.0)
 
 
 # @dataclass
@@ -323,6 +322,7 @@ class TuyaBLEDevice:
         self._post_command_disconnect_task: asyncio.Task | None = None
         self._post_command_refresh_task: asyncio.Task | None = None
         self._post_command_refresh_pending = False
+        self._post_command_refresh_running = False
         self._last_packet_received: datetime | None = None
 
         self._input_buffer: bytearray | None = None
@@ -417,9 +417,13 @@ class TuyaBLEDevice:
     def _clear_post_command_refresh(self) -> None:
         """Cancel any pending post-command refresh."""
         self._post_command_refresh_pending = False
-        if self._post_command_refresh_task is not None:
+        current_task = asyncio.current_task()
+        if (
+            self._post_command_refresh_task is not None
+            and self._post_command_refresh_task is not current_task
+        ):
             self._post_command_refresh_task.cancel()
-            self._post_command_refresh_task = None
+        self._post_command_refresh_task = None
 
     def _arm_post_command_disconnect(self) -> None:
         """Disconnect after post-command traffic has gone quiet."""
@@ -462,29 +466,34 @@ class TuyaBLEDevice:
             )
 
     async def _refresh_after_post_command_disconnect(self) -> None:
-        """Refresh status once the post-command disconnect has completed."""
+        """Refresh status repeatedly after the post-command disconnect has completed."""
+        self._post_command_refresh_running = True
         try:
-            while not self._stopping:
-                if not self._client or not self._client.is_connected:
+            delay_index = 0
+            while not self._stopping and self._post_command_refresh_pending:
+                delay = POST_COMMAND_REFRESH_DELAYS[
+                    min(delay_index, len(POST_COMMAND_REFRESH_DELAYS) - 1)
+                ]
+                await asyncio.sleep(delay)
+                if self._stopping or not self._post_command_refresh_pending:
                     break
-                await asyncio.sleep(POST_COMMAND_REFRESH_POLL)
-            await asyncio.sleep(POST_COMMAND_REFRESH_DELAY)
+                _LOGGER.debug(
+                    "%s: Post-command refresh after %.1fs",
+                    self.address,
+                    delay,
+                )
+                await self.update()
+                delay_index += 1
         except asyncio.CancelledError:
             return
         finally:
+            self._post_command_refresh_running = False
             self._post_command_refresh_task = None
 
         if self._stopping:
             return
         if not self._post_command_refresh_pending:
             return
-
-        self._post_command_refresh_pending = False
-        _LOGGER.debug(
-            "%s: Post-command disconnect complete; refreshing status once",
-            self.address,
-        )
-        await self.update()
 
     async def _wait_for_user_command_gate(self) -> None:
         """Wait until the blind's initial post-connect burst has gone quiet."""
@@ -818,7 +827,8 @@ class TuyaBLEDevice:
             self._is_paired = False
             self._clear_user_command_gate()
             self._clear_post_command_disconnect()
-            self._clear_post_command_refresh()
+            if not self._post_command_refresh_running:
+                self._clear_post_command_refresh()
             return
         was_paired = self._is_paired
         self._is_paired = False
@@ -835,7 +845,8 @@ class TuyaBLEDevice:
         self._client = None
         self._clear_user_command_gate()
         self._clear_post_command_disconnect()
-        self._clear_post_command_refresh()
+        if not self._post_command_refresh_running:
+            self._clear_post_command_refresh()
         _LOGGER.warning(
             "%s: Device unexpectedly disconnected; RSSI: %s",
             self.address,
@@ -879,7 +890,8 @@ class TuyaBLEDevice:
                 self._expected_disconnect = False
         self._clear_user_command_gate()
         self._clear_post_command_disconnect()
-        self._clear_post_command_refresh()
+        if not self._post_command_refresh_running:
+            self._clear_post_command_refresh()
         async with self._seq_num_lock:
             self._current_seq_num = 1
 
