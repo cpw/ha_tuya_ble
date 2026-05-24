@@ -1392,6 +1392,7 @@ class TuyaBLEDevice:
                             "%s: DPS packet looks like an ack/keepalive (payload=01)",
                             self.address,
                         )
+                        return
                     else:
                         _LOGGER.debug(
                             "%s: DPS packet carried no datapoints (payload_len=%s, payload=%s)",
@@ -1404,6 +1405,12 @@ class TuyaBLEDevice:
             case TuyaBLECode.FUN_RECEIVE_DP_V4 | TuyaBLECode.FUN_SENDER_DPS_V4:
                 parsed = self._parse_datapoints_v3(time.time(), 0, data, 0)
                 if parsed == 0:
+                    if data == b"\x01":
+                        _LOGGER.debug(
+                            "%s: DPS packet looks like an ack/keepalive (payload=01)",
+                            self.address,
+                        )
+                        return
                     _LOGGER.debug(
                         "%s: DPS packet carried no datapoints (payload_len=%s, payload=%s)",
                         self.address,
