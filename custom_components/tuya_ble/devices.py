@@ -3,6 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
+import random
 
 import logging
 from homeassistant.const import CONF_ADDRESS, CONF_DEVICE_ID
@@ -45,6 +46,12 @@ _LOGGER = logging.getLogger(__name__)
 
 # Keep blinds fresh without holding them open indefinitely.
 IDLE_REFRESH_DELAY = max(60.0, float(SET_DISCONNECTED_DELAY - 60))
+
+
+def _apply_jitter(delay: float) -> float:
+    """Spread retries out so blinds do not all wake up together."""
+    jitter = min(max(delay * 0.1, 1.0), 60.0)
+    return max(0.1, delay + random.uniform(-jitter, jitter))
 
 
 @dataclass
@@ -280,7 +287,11 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
 
     @property
     def connected(self) -> bool:
-        return not self._disconnected
+        return (
+            not self._disconnected
+            or self._unsub_idle_refresh is not None
+            or self._device.refresh_pending
+        )
 
     @callback
     def _async_handle_connect(self) -> None:
@@ -319,7 +330,7 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
         self.async_update_listeners()
 
     @callback
-    def _set_idle_refresh(self, _: None) -> None:
+    def _set_idle_refresh(self, scheduled_delay: float, _: None) -> None:
         """Enqueue a deferred refresh to keep the blind current."""
         self._unsub_idle_refresh = None
         if self._device._stopping:
@@ -327,7 +338,7 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
         _LOGGER.debug(
             "%s: Deferred idle refresh firing after %.1fs",
             self._device.address,
-            IDLE_REFRESH_DELAY,
+            scheduled_delay,
         )
         self.hass.create_task(self._device.update())
 
@@ -340,13 +351,18 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
                 self.hass, delay, self._set_disconnected
             )
         if self._unsub_idle_refresh is None and not self._device._stopping:
+            delay = _apply_jitter(IDLE_REFRESH_DELAY)
             _LOGGER.debug(
                 "%s: Scheduling deferred idle refresh after %.1fs",
                 self._device.address,
-                IDLE_REFRESH_DELAY,
+                delay,
             )
             self._unsub_idle_refresh = async_call_later(
-                self.hass, IDLE_REFRESH_DELAY, self._set_idle_refresh
+                self.hass,
+                delay,
+                lambda now, scheduled_delay=delay: self._set_idle_refresh(
+                    scheduled_delay, now
+                ),
             )
 
 

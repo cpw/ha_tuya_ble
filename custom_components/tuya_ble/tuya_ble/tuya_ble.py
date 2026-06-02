@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timezone
 import hashlib
 import logging
+import random
 import secrets
 import time
 from collections.abc import Callable, Hashable
@@ -63,6 +64,12 @@ POST_COMMAND_DISCONNECT_QUIET_DELAY = 1.0
 POST_COMMAND_DISCONNECT_POLL = 0.1
 POST_COMMAND_REFRESH_MOVING_DELAYS = (2.0, 5.0, 10.0)
 POST_COMMAND_REFRESH_STOPPED_DELAYS = (30.0, 60.0, 300.0)
+
+
+def _apply_jitter(delay: float) -> float:
+    """Spread retries out so blinds do not all wake up together."""
+    jitter = min(max(delay * 0.1, 1.0), 60.0)
+    return max(0.1, delay + random.uniform(-jitter, jitter))
 
 
 # @dataclass
@@ -426,6 +433,16 @@ class TuyaBLEDevice:
             self._post_command_refresh_task.cancel()
         self._post_command_refresh_task = None
 
+    @property
+    def refresh_pending(self) -> bool:
+        """Return whether a post-command refresh sequence is still active."""
+        return (
+            self._post_command_refresh_pending
+            or self._post_command_refresh_running
+            or self._post_command_disconnect_task is not None
+            or self._post_command_refresh_task is not None
+        )
+
     def _get_post_command_refresh_stopped(self) -> bool:
         """Return whether the blind currently reports a stopped state."""
         datapoint = self._datapoints[1]
@@ -445,7 +462,7 @@ class TuyaBLEDevice:
             if stopped
             else POST_COMMAND_REFRESH_MOVING_DELAYS
         )
-        return delays[min(refresh_count, len(delays) - 1)]
+        return _apply_jitter(delays[min(refresh_count, len(delays) - 1)])
 
     def _arm_post_command_disconnect(self) -> None:
         """Disconnect after post-command traffic has gone quiet."""
