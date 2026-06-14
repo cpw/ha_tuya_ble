@@ -45,7 +45,7 @@ from .base import IntegerTypeData, EnumTypeData
 _LOGGER = logging.getLogger(__name__)
 
 # Keep blinds fresh without holding them open indefinitely.
-IDLE_REFRESH_DELAY = max(60.0, float(SET_DISCONNECTED_DELAY - 60))
+IDLE_REFRESH_DELAY = max(60.0, float(SET_DISCONNECTED_DELAY - 5 * 60))
 
 
 def _apply_jitter(delay: float) -> float:
