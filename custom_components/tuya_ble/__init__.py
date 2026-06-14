@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 
-from bleak_retry_connector import BLEAK_RETRY_EXCEPTIONS as BLEAK_EXCEPTIONS, get_device
+from bleak_retry_connector import get_device
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.match import ADDRESS, BluetoothCallbackMatcher
@@ -23,7 +22,12 @@ from .tuya_ble import TuyaBLEDevice
 
 from .cloud import HASSTuyaBLEDeviceManager
 from .const import DOMAIN
-from .devices import TuyaBLECoordinator, TuyaBLEData, get_device_product_info
+from .devices import (
+    TuyaBLECoordinator,
+    TuyaBLEData,
+    get_device_product_info,
+    get_refresh_queue,
+)
 
 PLATFORMS: list[Platform] = [
     Platform.BUTTON,
@@ -68,30 +72,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ) from ex
     """
 
-    initial_update_task: asyncio.Task[None] | None = None
-
-    async def _async_initial_update(_event: Event | None = None) -> None:
-        """Run the first refresh after startup completes."""
-        try:
-            await device.update()
-        except asyncio.CancelledError:
-            _LOGGER.debug("Initial update for %s cancelled", address)
-            raise
-        except BLEAK_EXCEPTIONS:
-            _LOGGER.debug("Initial update for %s failed", address, exc_info=True)
-
     @callback
     def _async_cancel_initial_update() -> None:
         """Cancel the deferred startup refresh if it is still pending."""
-        if initial_update_task and not initial_update_task.done():
-            initial_update_task.cancel()
+        get_refresh_queue(hass).cancel(address)
 
     if hass.state == CoreState.running:
-        initial_update_task = asyncio.create_task(device.update())
+        _LOGGER.debug("%s: Scheduling startup refresh", address)
+        get_refresh_queue(hass).enqueue(device, 2.0, "startup")
     else:
         async def _async_startup_refresh(_event: Event) -> None:
-            nonlocal initial_update_task
-            initial_update_task = asyncio.create_task(_async_initial_update())
+            _LOGGER.debug("%s: Scheduling startup refresh after HA started", address)
+            get_refresh_queue(hass).enqueue(device, 2.0, "startup")
 
         entry.async_on_unload(
             hass.bus.async_listen_once(
