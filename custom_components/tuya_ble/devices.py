@@ -1,8 +1,10 @@
 """The Tuya BLE integration."""
 
 from __future__ import annotations
+import asyncio
 from dataclasses import dataclass
 from typing import Any
+from datetime import datetime, timedelta, timezone
 import random
 
 import logging
@@ -15,7 +17,6 @@ from homeassistant.helpers.entity import (
     EntityDescription,
     generate_entity_id,
 )
-from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -52,6 +53,120 @@ def _apply_jitter(delay: float) -> float:
     """Spread retries out so blinds do not all wake up together."""
     jitter = min(max(delay * 0.1, 1.0), 60.0)
     return max(0.1, delay + random.uniform(-jitter, jitter))
+
+
+@dataclass
+class _QueuedRefresh:
+    """Track one pending refresh for a device."""
+
+    address: str
+    device: TuyaBLEDevice
+    due_at: datetime
+    delay: float
+    reason: str
+    seq: int
+
+
+class TuyaBLERefreshQueue:
+    """Serialize deferred blind refreshes."""
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
+        self._requests: dict[str, _QueuedRefresh] = {}
+        self._wake = asyncio.Event()
+        self._worker_task: asyncio.Task[None] | None = None
+        self._seq = 0
+
+    @property
+    def has_pending(self) -> bool:
+        return bool(self._requests)
+
+    def has_pending_for(self, address: str) -> bool:
+        return address in self._requests
+
+    def cancel(self, address: str) -> None:
+        if address in self._requests:
+            request = self._requests.pop(address, None)
+            if request is not None:
+                request.device._idle_refresh_pending = False
+            self._wake.set()
+
+    def enqueue(self, device: TuyaBLEDevice, delay: float, reason: str) -> None:
+        delay = _apply_jitter(delay)
+        request = _QueuedRefresh(
+            address=device.address,
+            device=device,
+            due_at=datetime.now(timezone.utc) + timedelta(seconds=delay),
+            delay=delay,
+            reason=reason,
+            seq=self._seq,
+        )
+        self._seq += 1
+        current = self._requests.get(device.address)
+        if current is None or request.due_at <= current.due_at:
+            self._requests[device.address] = request
+        device._idle_refresh_pending = True
+        self._wake.set()
+        if self._worker_task is None or self._worker_task.done():
+            self._worker_task = self._hass.create_task(self._run())
+
+    async def _run(self) -> None:
+        while self._requests:
+            request = min(
+                self._requests.values(),
+                key=lambda item: (item.due_at, item.seq),
+            )
+            now = datetime.now(timezone.utc)
+            wait_for = (request.due_at - now).total_seconds()
+            if wait_for > 0:
+                self._wake.clear()
+                try:
+                    await asyncio.wait_for(self._wake.wait(), wait_for)
+                    continue
+                except asyncio.TimeoutError:
+                    pass
+                except asyncio.CancelledError:
+                    return
+
+            current = self._requests.get(request.address)
+            if current is None or current.seq != request.seq:
+                continue
+
+            self._requests.pop(request.address, None)
+            request.device._idle_refresh_pending = False
+            if request.device._stopping:
+                continue
+
+            _LOGGER.debug(
+                "%s: Deferred idle refresh firing after %.1fs (%s)",
+                request.address,
+                request.delay,
+                request.reason,
+            )
+            try:
+                await request.device.update()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.debug(
+                    "%s: Deferred idle refresh failed; requeueing",
+                    request.address,
+                    exc_info=True,
+                )
+                if not request.device._stopping:
+                    self.enqueue(request.device, IDLE_REFRESH_DELAY, request.reason)
+
+        self._worker_task = None
+
+
+def get_refresh_queue(hass: HomeAssistant) -> TuyaBLERefreshQueue:
+    """Return the shared deferred refresh queue."""
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    queue = domain_data.get("_tuya_refresh_queue")
+    if queue is None:
+        queue = TuyaBLERefreshQueue(hass)
+        domain_data["_tuya_refresh_queue"] = queue
+    return queue
 
 
 @dataclass
@@ -279,8 +394,7 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
         )
         self._device = device
         self._disconnected: bool = True
-        self._unsub_disconnect: CALLBACK_TYPE | None = None
-        self._unsub_idle_refresh: CALLBACK_TYPE | None = None
+        self._unsub_disconnect: asyncio.TimerHandle | None = None
         device.register_connected_callback(self._async_handle_connect)
         device.register_callback(self._async_handle_update)
         device.register_disconnected_callback(self._async_handle_disconnect)
@@ -289,18 +403,17 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
     def connected(self) -> bool:
         return (
             not self._disconnected
-            or self._unsub_idle_refresh is not None
+            or self._device.idle_refresh_pending
             or self._device.refresh_pending
         )
 
     @callback
     def _async_handle_connect(self) -> None:
+        queue = get_refresh_queue(self._hass)
+        queue.cancel(self._device.address)
         if self._unsub_disconnect is not None:
-            self._unsub_disconnect()
+            self._unsub_disconnect.cancel()
             self._unsub_disconnect = None
-        if self._unsub_idle_refresh is not None:
-            self._unsub_idle_refresh()
-            self._unsub_idle_refresh = None
         if self._disconnected:
             self._disconnected = False
             self.async_update_listeners()
@@ -330,39 +443,24 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
         self.async_update_listeners()
 
     @callback
-    def _set_idle_refresh(self, scheduled_delay: float, _: None) -> None:
-        """Enqueue a deferred refresh to keep the blind current."""
-        self._unsub_idle_refresh = None
-        if self._device._stopping:
-            return
-        _LOGGER.debug(
-            "%s: Deferred idle refresh firing after %.1fs",
-            self._device.address,
-            scheduled_delay,
-        )
-        self.hass.create_task(self._device.update())
-
-    @callback
     def _async_handle_disconnect(self) -> None:
         """Trigger the callbacks for disconnected."""
         if self._unsub_disconnect is None:
             delay: float = SET_DISCONNECTED_DELAY
-            self._unsub_disconnect = async_call_later(
-                self.hass, delay, self._set_disconnected
+            self._unsub_disconnect = self.hass.loop.call_later(
+                delay, self._set_disconnected, None
             )
-        if self._unsub_idle_refresh is None and not self._device._stopping:
+        if not self._device._stopping:
             delay = _apply_jitter(IDLE_REFRESH_DELAY)
             _LOGGER.debug(
                 "%s: Scheduling deferred idle refresh after %.1fs",
                 self._device.address,
                 delay,
             )
-            self._unsub_idle_refresh = async_call_later(
-                self.hass,
+            get_refresh_queue(self.hass).enqueue(
+                self._device,
                 delay,
-                lambda now, scheduled_delay=delay: self._set_idle_refresh(
-                    scheduled_delay, now
-                ),
+                "idle",
             )
 
 

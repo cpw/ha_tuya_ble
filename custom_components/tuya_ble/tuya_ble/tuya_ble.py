@@ -332,6 +332,7 @@ class TuyaBLEDevice:
         self._post_command_refresh_pending = False
         self._post_command_refresh_running = False
         self._last_packet_received: datetime | None = None
+        self._idle_refresh_pending = False
 
         self._input_buffer: bytearray | None = None
         self._input_expected_packet_num = 0
@@ -442,6 +443,11 @@ class TuyaBLEDevice:
             or self._post_command_disconnect_task is not None
             or self._post_command_refresh_task is not None
         )
+
+    @property
+    def idle_refresh_pending(self) -> bool:
+        """Return whether the blind is queued for an idle refresh."""
+        return self._idle_refresh_pending
 
     def _get_post_command_refresh_stopped(self) -> bool:
         """Return whether the blind currently reports a stopped state."""
