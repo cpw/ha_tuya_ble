@@ -409,7 +409,7 @@ class TuyaBLECoordinator(DataUpdateCoordinator[None]):
 
     @callback
     def _async_handle_connect(self) -> None:
-        queue = get_refresh_queue(self._hass)
+        queue = get_refresh_queue(self.hass)
         queue.cancel(self._device.address)
         if self._unsub_disconnect is not None:
             self._unsub_disconnect.cancel()
